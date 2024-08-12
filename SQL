@@ -1,0 +1,94 @@
+/* Danh sách các đơn hàng được đặt 
+trong năm 2013. Đồng thời có CarrierTrackingNumber bắt đầu bằng 2 chữ cái, kết thúc bằng 2 
+chữ số và chữ cái thứ 7 là chữ “C” hoặc chữ “F” */
+
+SELECT 
+  OrderDate
+  , SalesOrderNumber
+  , SalesOrderLineNumber
+  , ResellerName
+  , BusinessType
+  , SalesAmount
+FROM FactResellerSales AS FRS
+  JOIN DimReseller AS DR
+    ON FRS.ResellerKey = DR.ResellerKey
+WHERE CarrierTrackingNumber LIKE '[a-z][a-z]____[C,F]%[0-9][0-9]';
+
+/* tổng doanh thu (đặt tên là ResellerSalesAmount), số lượng mã đơn đã đặt (NumberofOrders) của từng năm đối 
+với mỗi BussinessType. Chỉ tính toán trên các Reseller đến từ City = “London” */
+
+SELECT 
+  YEAR(OrderDate) AS OrderYear
+  , MONTH(OrderDate) AS OrderMonth
+  , BusinessType
+  , SUM(SalesAmount) AS ResellerSalesAmount
+  , COUNT(SalesOrderNumber) AS NumberOfOrders
+FROM FactResellerSales AS FRS
+  JOIN DimReseller AS DR
+    ON DR.ResellerKey = FRS.ResellerKey
+  JOIN DimGeography AS DG
+    ON DG.GeographyKey = DR.GeographyKey
+WHERE City = 'London'
+GROUP BY BusinessType, YEAR(OrderDate), MONTH(OrderDate);      
+
+/* A:  Danh sách top 5 nhân viên có tổng doanh thu tháng (đặt tên là 
+EmployeeMonthAmount) cao nhất trong hệ thống theo mỗi tháng
+B: Mở rộng kết quả câu a, tính toán thêm thông tin về doanh thu cùng kỳ năm ngoái của các 
+nhân viên này */
+
+WITH A AS
+(
+    SELECT 
+    YEAR(OrderDate) AS OrderYear
+    , MONTH(OrderDate) AS OrderMonth
+    , FRS.EmployeeKey
+    , CONCAT_WS(' ', FirstName, MiddleName, LastName ) AS EmployeeFullName     
+    , SUM(SalesAmount) AS EmployeeMonthAmount
+    FROM FactResellerSales AS FRS
+    JOIN DimEmployee AS DE 
+        ON DE.EmployeeKey = FRS.EmployeeKey
+    GROUP BY YEAR(OrderDate) , MONTH(OrderDate) , FRS.EmployeeKey, CONCAT_WS(' ', FirstName, MiddleName, LastName ) 
+)
+
+  , B AS
+(
+    SELECT * 
+      , ROW_NUMBER() OVER(
+          PARTITION BY OrderYear, OrderMonth 
+          ORDER BY EmployeeMonthAmount DESC
+      )
+      AS [Rank]
+    FROM A 
+)
+
+  , C AS 
+(
+    SELECT OrderYear, OrderMonth, EmployeeKey, EmployeeFullName, EmployeeMonthAmount
+    FROM B
+    WHERE [Rank] < 6
+) 
+SELECT C.OrderYear, C.OrderMonth, C.EmployeeKey, C.EmployeeFullName, C.EmployeeMonthAmount
+, COALESCE(A.EmployeeMonthAmount, 0) AS EmployeeMonthAmount_LastYear
+FROM C
+  LEFT JOIN A
+    ON C.OrderYear - 1 = A.OrderYear
+      AND C.OrderMonth = A.OrderMonth
+      AND C.EmployeeKey = A.EmployeeKey
+
+
+/*  tổng doanh thu từ kênh Internet (đặt tên InternetTotalSalesAmount) và tổng doanh thu từ kênh Reseller (đặt tên là 
+ResellerTotalSalesAmount) của từng sản phẩm. Đối với những sản phẩm chưa bán được thì hiển 
+thị doanh số bằng 0 */
+
+SELECT 
+  DP.ProductKey
+  , EnglishProductName
+  , COALESCE(SUM(FIS.SalesAmount), 0) AS InternetTotalSalesAmount 
+  , COALESCE(SUM(FRS.SalesAmount), 0) AS ResellerTotalSalesAmount
+FROM DimProduct AS DP
+  LEFT JOIN FactInternetSales AS FIS
+    ON FIS.ProductKey = DP.ProductKey
+  LEFT JOIN FactResellerSales AS FRS
+    ON FRS.ProductKey = DP.ProductKey
+GROUP BY DP.ProductKey, EnglishProductName
+ORDER BY InternetTotalSalesAmount DESC, ResellerTotalSalesAmount DESC
